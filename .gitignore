@@ -8,6 +8,7 @@ node_modules/
 
 # VSCode personal settings (keep settings.shared.json tracked!)
 .vscode/settings.json
+.vscode/settings.shared-lastsync.json
 
 # Test files
 .vscode-test/

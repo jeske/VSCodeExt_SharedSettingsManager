@@ -10,6 +10,7 @@ export class SettingsManager {
 	private readonly workspaceFolderPath: string;
 	private readonly sharedSettingsFilePath: string;
 	private readonly settingsFilePath: string;
+	private readonly lastSyncFilePath: string;
 	private readonly outputChannel: vscode.OutputChannel;
 	private lastSharedSettingsHash: string = '';
 	private lastSettingsJsonHash: string = '';
@@ -18,6 +19,7 @@ export class SettingsManager {
 		this.workspaceFolderPath = workspaceFolder.uri.fsPath;
 		this.sharedSettingsFilePath = path.join(this.workspaceFolderPath, '.vscode', 'settings.shared.json');
 		this.settingsFilePath = path.join(this.workspaceFolderPath, '.vscode', 'settings.json');
+		this.lastSyncFilePath = path.join(this.workspaceFolderPath, '.vscode', 'settings.shared-lastsync.json');
 		this.outputChannel = outputChannel;
 	}
 
@@ -56,16 +58,26 @@ export class SettingsManager {
 
 			this.outputChannel.appendLine(`Changes detected - shared: ${sharedChanged}, settings: ${settingsChanged}`);
 
+			// Read previously managed keys from last sync file
+			const previouslyManagedKeys = await this.readLastSyncKeys();
+
+			// Remove previously managed keys (handles deleted shared settings)
+			let cleanedSettings = currentSettingsContent;
+			if (previouslyManagedKeys.length > 0) {
+				const keysToRemove = Object.fromEntries(previouslyManagedKeys.map((k: string) => [k, null]));
+				cleanedSettings = removeKeys(cleanedSettings, keysToRemove);
+				this.outputChannel.appendLine(`Removed ${previouslyManagedKeys.length} previously managed keys`);
+			}
+
 			// Conservative check: verify if all shared settings values already match in settings.json
-			if (this.allSharedSettingsMatch(currentSettingsContent, sharedSettingsContent)) {
+			if (this.allSharedSettingsMatch(cleanedSettings, sharedSettingsContent)) {
 				this.outputChannel.appendLine('All shared settings already match current settings, no sync needed');
 				this.lastSharedSettingsHash = sharedSettingsHash;
 				this.lastSettingsJsonHash = currentSettingsHash;
+				// Update last sync file even if no write needed
+				await this.writeLastSyncKeys(Object.keys(sharedSettingsContent));
 				return false;
 			}
-
-			// Remove all keys that exist in shared settings
-			const cleanedSettings = removeKeys(currentSettingsContent, sharedSettingsContent);
 
 			// Deep merge shared settings into cleaned settings
 			const mergedSettings = deepMerge(cleanedSettings, sharedSettingsContent);
@@ -84,6 +96,9 @@ export class SettingsManager {
 
 			// Write back to settings.json
 			await this.writeSettings(mergedSettings);
+
+			// Write last sync tracking file
+			await this.writeLastSyncKeys(Object.keys(sharedSettingsContent));
 
 			// Update hashes AFTER successful write
 			this.lastSharedSettingsHash = sharedSettingsHash;
@@ -212,8 +227,8 @@ export class SettingsManager {
 	}
 
 	/**
-	 * Writes settings object to settings.json while preserving user comments.
-	 * Uses JSONC edit API to modify only the necessary keys.
+	 * Writes settings to settings.json preserving comments and maintaining proper ordering.
+	 * Uses JSONC modify API for surgical edits, then appends team settings block.
 	 */
 	private async writeSettings(settingsContent: Record<string, unknown>): Promise<void> {
 		try {
@@ -221,65 +236,108 @@ export class SettingsManager {
 			const vscodeDirPath = path.join(this.workspaceFolderPath, '.vscode');
 			await fs.mkdir(vscodeDirPath, { recursive: true });
 
-			// Read existing file content (preserving comments)
-			let originalText = '';
-			let originalObject: Record<string, unknown> = {};
+			// Read shared settings to know which keys are team settings
+			const sharedSettings = await this.readSharedSettings();
+			if (!sharedSettings) {
+				return;
+			}
 
+			const sharedKeys = Object.keys(sharedSettings);
+			const previouslyManagedKeys = await this.readLastSyncKeys();
+
+			// Read existing file
+			let text = '';
 			try {
-				originalText = await fs.readFile(this.settingsFilePath, 'utf-8');
-				// Remove our marker comment for parsing
-				const textWithoutMarker = originalText.replace(/\s*\/\/\s*Team settings \(merged from \.vscode\/settings\.shared\.json\)\s*\n?/gi, '\n');
-				originalObject = JSONC.parse(textWithoutMarker, undefined, { allowTrailingComma: true }) as Record<string, unknown>;
+				text = await fs.readFile(this.settingsFilePath, 'utf-8');
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+				if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+					text = '{\n}';
+				} else {
 					throw error;
 				}
-				// File doesn't exist - will create new
 			}
 
-			// Use JSONC modify API to preserve comments
-			let resultText = originalText || '{\n}';
 			const formattingOptions = { tabSize: 2, insertSpaces: true, eol: '\n' };
+			const marker = '// Team settings (merged from .vscode/settings.shared.json)';
 
-			// First, remove keys that no longer exist in target
-			for (const key in originalObject) {
-				if (!Object.prototype.hasOwnProperty.call(settingsContent, key)) {
-					const edits = JSONC.modify(resultText, [key], undefined, { formattingOptions });
-					resultText = JSONC.applyEdits(resultText, edits);
-				}
+			// Step 1: Remove old managed keys using modify() - preserves comments
+			for (const key of previouslyManagedKeys) {
+				const edits = JSONC.modify(text, [key], undefined, { formattingOptions });
+				text = JSONC.applyEdits(text, edits);
 			}
 
-			// Then, add or update all keys from target
+			// Step 2: Remove old marker comment line if present
+			const markerIndex = text.indexOf(marker);
+			if (markerIndex >= 0) {
+				const lineStart = text.lastIndexOf('\n', markerIndex);
+				const lineEnd = text.indexOf('\n', markerIndex + marker.length);
+				text = text.substring(0, lineStart) + text.substring(lineEnd >= 0 ? lineEnd : text.length);
+			}
+
+			// Step 3: Add/update personal settings using modify() - preserves comments
 			for (const key in settingsContent) {
-				if (!Object.prototype.hasOwnProperty.call(settingsContent, key)) {
-					continue;
-				}
-				const edits = JSONC.modify(resultText, [key], settingsContent[key], { formattingOptions });
-				resultText = JSONC.applyEdits(resultText, edits);
-			}
-
-			// Add team settings marker comment before the closing brace
-			const sharedSettings = await this.readSharedSettings();
-			if (sharedSettings && Object.keys(sharedSettings).length > 0) {
-				// Find the position just before the last closing brace
-				const lastBraceIndex = resultText.lastIndexOf('}');
-				if (lastBraceIndex !== -1) {
-					const beforeBrace = resultText.substring(0, lastBraceIndex);
-					const afterBrace = resultText.substring(lastBraceIndex);
-
-					// Check if marker already exists
-					if (!beforeBrace.includes('// Team settings (merged from .vscode/settings.shared.json)')) {
-						resultText = beforeBrace + '\n  // Team settings (merged from .vscode/settings.shared.json)\n' + afterBrace;
-					}
+				if (!sharedKeys.includes(key)) {
+					const edits = JSONC.modify(text, [key], settingsContent[key], { formattingOptions });
+					text = JSONC.applyEdits(text, edits);
 				}
 			}
 
-			await fs.writeFile(this.settingsFilePath, resultText, 'utf-8');
+			// Step 4: Find closing brace, append shared block before it
+			const closingBraceIndex = text.lastIndexOf('}');
+			const beforeBrace = text.substring(0, closingBraceIndex).trimEnd();
+			const needsComma = !/,\s*$/.test(beforeBrace);
+
+			let sharedBlock = '\n\n  ' + marker + '\n';
+			for (let i = 0; i < sharedKeys.length; i++) {
+				const key = sharedKeys[i];
+				const value = sharedSettings[key];
+				const jsonValue = JSON.stringify(value);
+				const comma = i < sharedKeys.length - 1 ? ',' : '';
+				sharedBlock += `  "${key}": ${jsonValue}${comma}\n`;
+			}
+
+			text = beforeBrace + (needsComma ? ',' : '') + sharedBlock + '}';
+
+			// Step 5: Write back
+			await fs.writeFile(this.settingsFilePath, text, 'utf-8');
 
 			this.outputChannel.appendLine(`Wrote updated settings to ${this.settingsFilePath}`);
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			throw new Error(`Failed to write settings.json in ${this.writeSettings.name}: ${errorMessage}`);
+		}
+	}
+
+	/**
+	 * Read the list of keys that were managed in the last sync
+	 */
+	private async readLastSyncKeys(): Promise<string[]> {
+		try {
+			const fileContent = await fs.readFile(this.lastSyncFilePath, 'utf-8');
+			const parsed = JSON.parse(fileContent);
+			return Array.isArray(parsed.managedKeys) ? parsed.managedKeys : [];
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+				// File doesn't exist yet
+				return [];
+			}
+			this.outputChannel.appendLine(`Warning: Could not read last sync file: ${error}`);
+			return [];
+		}
+	}
+
+	/**
+	 * Write the list of currently managed keys to the last sync tracking file
+	 */
+	private async writeLastSyncKeys(managedKeys: string[]): Promise<void> {
+		try {
+			const content = {
+				managedKeys,
+				lastSync: new Date().toISOString()
+			};
+			await fs.writeFile(this.lastSyncFilePath, JSON.stringify(content, null, 2), 'utf-8');
+		} catch (error) {
+			this.outputChannel.appendLine(`Warning: Could not write last sync file: ${error}`);
 		}
 	}
 
