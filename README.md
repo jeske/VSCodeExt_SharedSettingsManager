@@ -53,7 +53,7 @@ This ensures that:
 **settings.json** (after sync):
 ```json
 {
-    // user settings    
+    // user settings
     "editor.fontSize": 12,
     "terminal.integrated.fontSize": 13,
     "workbench.colorTheme": "Default Dark+",
@@ -75,6 +75,33 @@ The extension shows a status bar item on the right side:
 
 For detailed logging, open the "Shared Settings Manager" output channel:
 - View → Output → Select "Shared Settings Manager" from dropdown
+
+## ⚠️ Important: Git Configuration
+
+**You MUST add these files to your `.gitignore`:**
+
+```gitignore
+# VSCode personal settings - DO NOT COMMIT
+.vscode/settings.json
+.vscode/settings.shared-lastsync.json
+```
+
+**Why?**
+- `settings.json` - Contains your personal preferences (should not be shared)
+- `settings.shared-lastsync.json` - Auto-generated tracking file (machine-specific)
+
+**What TO commit:**
+- ✅ `.vscode/settings.shared.json` - Team-wide settings (commit this!)
+
+**Example `.gitignore`:**
+```gitignore
+# VSCode personal settings
+.vscode/settings.json
+.vscode/settings.shared-lastsync.json
+
+# Keep shared settings tracked
+# .vscode/settings.shared.json should be committed!
+```
 
 ## Use Cases
 
