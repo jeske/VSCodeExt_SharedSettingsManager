@@ -136,7 +136,7 @@ export class SettingsManager {
 		try {
 			const fileContent = await fs.readFile(this.sharedSettingsFilePath, 'utf-8');
 			const parseErrors: JSONC.ParseError[] = [];
-			const parsedContent = JSONC.parse(fileContent, parseErrors);
+			const parsedContent = JSONC.parse(fileContent, parseErrors, { allowTrailingComma: true });
 
 			if (parseErrors.length > 0) {
 				const firstError = parseErrors[0];
@@ -179,7 +179,7 @@ export class SettingsManager {
 			fileContent = fileContent.replace(/\s*\/\/\s*Team settings \(merged from \.vscode\/settings\.shared\.json\)\s*\n?/gi, '\n');
 
 			const parseErrors: JSONC.ParseError[] = [];
-			const parsedContent = JSONC.parse(fileContent, parseErrors);
+			const parsedContent = JSONC.parse(fileContent, parseErrors, { allowTrailingComma: true });
 
 			if (parseErrors.length > 0) {
 				const firstError = parseErrors[0];
@@ -229,7 +229,7 @@ export class SettingsManager {
 				originalText = await fs.readFile(this.settingsFilePath, 'utf-8');
 				// Remove our marker comment for parsing
 				const textWithoutMarker = originalText.replace(/\s*\/\/\s*Team settings \(merged from \.vscode\/settings\.shared\.json\)\s*\n?/gi, '\n');
-				originalObject = JSONC.parse(textWithoutMarker) as Record<string, unknown>;
+				originalObject = JSONC.parse(textWithoutMarker, undefined, { allowTrailingComma: true }) as Record<string, unknown>;
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
 					throw error;

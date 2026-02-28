@@ -35,6 +35,22 @@ export function activate(extensionContext: vscode.ExtensionContext) {
 		}
 	});
 
+	// Set language mode for settings.shared.json to JSONC
+	vscode.workspace.onDidOpenTextDocument(document => {
+		if (document.fileName.endsWith('.vscode/settings.shared.json') ||
+		    document.fileName.endsWith('.vscode\\settings.shared.json')) {
+			vscode.languages.setTextDocumentLanguage(document, 'jsonc');
+		}
+	});
+
+	// Also set it for currently open documents
+	vscode.workspace.textDocuments.forEach(document => {
+		if (document.fileName.endsWith('.vscode/settings.shared.json') ||
+		    document.fileName.endsWith('.vscode\\settings.shared.json')) {
+			vscode.languages.setTextDocumentLanguage(document, 'jsonc');
+		}
+	});
+
 	// Setup file watcher for settings.shared.json
 	const sharedSettingsPattern = new vscode.RelativePattern(
 		primaryWorkspaceFolder,
