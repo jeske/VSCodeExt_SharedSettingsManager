@@ -1,0 +1,43 @@
+{
+  "name": "shared-settings-manager",
+  "displayName": "Shared Settings Manager",
+  "description": "Automatically sync shared team settings from settings.shared.json into settings.json",
+  "version": "0.1.5",
+  "version_instructions": "increment only the patch number while doing dev iteration",
+  "publisher": "artificial-necessity",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": []
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "lint": "eslint src --ext ts",
+    "bump-version": "node scripts/bump-version.js",
+    "package": "npm run bump-version && vsce package --allow-missing-repository",
+    "build": "npm run compile && npm run package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.x",
+    "@typescript-eslint/parser": "^6.x",
+    "@vscode/vsce": "^2.22.0",
+    "eslint": "^8.x",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
+  }
+}

@@ -1,0 +1,33 @@
+# Compiled output
+out/
+*.js
+*.js.map
+
+# Node modules
+node_modules/
+
+# VSCode personal settings (keep settings.shared.json tracked!)
+.vscode/settings.json
+
+# Test files
+.vscode-test/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+dist/
+*.vsix
+
+# reflex system
+.reflex/
