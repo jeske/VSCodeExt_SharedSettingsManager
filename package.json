@@ -2,9 +2,17 @@
   "name": "shared-settings-manager",
   "displayName": "Shared Settings Manager",
   "description": "Automatically sync shared team settings from settings.shared.json into settings.json",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "version_instructions": "increment only the patch number while doing dev iteration",
   "publisher": "artificial-necessity",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeske/VSCodeExt_SharedSettingsManager"
+  },
+  "bugs": {
+    "url": "https://github.com/jeske/VSCodeExt_SharedSettingsManager/issues"
+  },
+  "homepage": "https://github.com/jeske/VSCodeExt_SharedSettingsManager#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
