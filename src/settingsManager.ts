@@ -70,7 +70,8 @@ export class SettingsManager {
 			}
 
 			// Conservative check: verify if all shared settings values already match in settings.json
-			if (this.allSharedSettingsMatch(cleanedSettings, sharedSettingsContent)) {
+			// BUT: if cleanedSettings is empty (file was deleted/renamed), always sync
+			if (Object.keys(cleanedSettings).length > 0 && this.allSharedSettingsMatch(cleanedSettings, sharedSettingsContent)) {
 				this.outputChannel.appendLine('All shared settings already match current settings, no sync needed');
 				this.lastSharedSettingsHash = sharedSettingsHash;
 				this.lastSettingsJsonHash = currentSettingsHash;
@@ -87,22 +88,24 @@ export class SettingsManager {
 			const newSettingsHash = this.computeHash(newSettingsText);
 
 			// Final check: if the result would actually be identical
-			if (newSettingsHash === currentSettingsHash) {
+			// BUT: if current settings are empty, always write (file was deleted/missing)
+			const currentIsEmpty = Object.keys(currentSettingsContent).length === 0;
+			if (!currentIsEmpty && newSettingsHash === currentSettingsHash) {
 				this.outputChannel.appendLine('Computed result matches current settings, no write needed');
 				this.lastSharedSettingsHash = sharedSettingsHash;
 				this.lastSettingsJsonHash = currentSettingsHash;
 				return false;
 			}
 
-			// Write back to settings.json
-			await this.writeSettings(mergedSettings);
+			// Write back to settings.json and get the actual written content hash
+			const actualWrittenHash = await this.writeSettings(mergedSettings);
 
 			// Write last sync tracking file
 			await this.writeLastSyncKeys(Object.keys(sharedSettingsContent));
 
-			// Update hashes AFTER successful write
+			// Update hashes AFTER successful write - use the ACTUAL written hash
 			this.lastSharedSettingsHash = sharedSettingsHash;
-			this.lastSettingsJsonHash = newSettingsHash;
+			this.lastSettingsJsonHash = actualWrittenHash;
 
 			this.outputChannel.appendLine('Settings sync completed successfully');
 			return true;
@@ -190,6 +193,12 @@ export class SettingsManager {
 		try {
 			let fileContent = await fs.readFile(this.settingsFilePath, 'utf-8');
 
+			// Check if file is empty or whitespace only
+			if (!fileContent || fileContent.trim().length === 0) {
+				this.outputChannel.appendLine('settings.json is empty, treating as new file');
+				return {};
+			}
+
 			// Remove our marker comment line if present (so it doesn't interfere with parsing/hashing)
 			fileContent = fileContent.replace(/\s*\/\/\s*Team settings \(merged from \.vscode\/settings\.shared\.json\)\s*\n?/gi, '\n');
 
@@ -197,20 +206,16 @@ export class SettingsManager {
 			const parsedContent = JSONC.parse(fileContent, parseErrors, { allowTrailingComma: true });
 
 			if (parseErrors.length > 0) {
+				// Parse error - log it but treat as empty file instead of failing
 				const firstError = parseErrors[0];
-				const errorDetails = {
-					file: this.settingsFilePath,
-					offset: firstError.offset,
-					error: JSONC.printParseErrorCode(firstError.error)
-				};
-				throw Object.assign(
-					new Error(`JSON parse error at offset ${firstError.offset}: ${JSONC.printParseErrorCode(firstError.error)}`),
-					{ parseError: errorDetails }
-				);
+				this.outputChannel.appendLine(`WARNING: settings.json has parse error at offset ${firstError.offset}: ${JSONC.printParseErrorCode(firstError.error)}`);
+				this.outputChannel.appendLine('Treating as empty file and will recreate');
+				return {};
 			}
 
 			if (typeof parsedContent !== 'object' || parsedContent === null || Array.isArray(parsedContent)) {
-				throw new Error('settings.json must contain a JSON object');
+				this.outputChannel.appendLine('WARNING: settings.json does not contain a valid object, treating as empty');
+				return {};
 			}
 
 			return parsedContent as Record<string, unknown>;
@@ -221,16 +226,19 @@ export class SettingsManager {
 				return {};
 			}
 
-			const errorMessage = error instanceof Error ? error.message : String(error);
-			throw new Error(`Failed to read settings.json in ${this.readSettings.name}: ${errorMessage}`);
+			// Any other error - log and treat as empty
+			this.outputChannel.appendLine(`WARNING: Could not read settings.json: ${error}`);
+			this.outputChannel.appendLine('Treating as empty file and will recreate');
+			return {};
 		}
 	}
 
 	/**
 	 * Writes settings to settings.json preserving comments and maintaining proper ordering.
 	 * Uses JSONC modify API for surgical edits, then appends team settings block.
+	 * Returns the hash of what was actually written.
 	 */
-	private async writeSettings(settingsContent: Record<string, unknown>): Promise<void> {
+	private async writeSettings(settingsContent: Record<string, unknown>): Promise<string> {
 		try {
 			// Ensure .vscode directory exists
 			const vscodeDirPath = path.join(this.workspaceFolderPath, '.vscode');
@@ -239,7 +247,8 @@ export class SettingsManager {
 			// Read shared settings to know which keys are team settings
 			const sharedSettings = await this.readSharedSettings();
 			if (!sharedSettings) {
-				return;
+				// No shared settings - return empty hash
+				return '';
 			}
 
 			const sharedKeys = Object.keys(sharedSettings);
@@ -247,11 +256,14 @@ export class SettingsManager {
 
 			// Read existing file
 			let text = '';
+			let fileExists = true;
 			try {
 				text = await fs.readFile(this.settingsFilePath, 'utf-8');
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
 					text = '{\n}';
+					fileExists = false;
+					this.outputChannel.appendLine('settings.json does not exist, creating new file');
 				} else {
 					throw error;
 				}
@@ -260,32 +272,39 @@ export class SettingsManager {
 			const formattingOptions = { tabSize: 2, insertSpaces: true, eol: '\n' };
 			const marker = '// Team settings (merged from .vscode/settings.shared.json)';
 
-			// Step 1: Remove old managed keys using modify() - preserves comments
-			for (const key of previouslyManagedKeys) {
-				const edits = JSONC.modify(text, [key], undefined, { formattingOptions });
-				text = JSONC.applyEdits(text, edits);
-			}
-
-			// Step 2: Remove old marker comment line if present
-			const markerIndex = text.indexOf(marker);
-			if (markerIndex >= 0) {
-				const lineStart = text.lastIndexOf('\n', markerIndex);
-				const lineEnd = text.indexOf('\n', markerIndex + marker.length);
-				text = text.substring(0, lineStart) + text.substring(lineEnd >= 0 ? lineEnd : text.length);
-			}
-
-			// Step 3: Add/update personal settings using modify() - preserves comments
-			for (const key in settingsContent) {
-				if (!sharedKeys.includes(key)) {
-					const edits = JSONC.modify(text, [key], settingsContent[key], { formattingOptions });
+			// Only do surgical edits if file exists - otherwise we'll build from scratch
+			if (fileExists) {
+				// Step 1: Remove old managed keys using modify() - preserves comments
+				for (const key of previouslyManagedKeys) {
+					const edits = JSONC.modify(text, [key], undefined, { formattingOptions });
 					text = JSONC.applyEdits(text, edits);
+				}
+
+				// Step 2: Remove old marker comment line if present
+				const markerIndex = text.indexOf(marker);
+				if (markerIndex >= 0) {
+					const lineStart = text.lastIndexOf('\n', markerIndex);
+					const lineEnd = text.indexOf('\n', markerIndex + marker.length);
+					text = text.substring(0, lineStart) + text.substring(lineEnd >= 0 ? lineEnd : text.length);
+				}
+
+				// Step 3: Add/update personal settings using modify() - preserves comments
+				for (const key in settingsContent) {
+					if (!sharedKeys.includes(key)) {
+						const edits = JSONC.modify(text, [key], settingsContent[key], { formattingOptions });
+						text = JSONC.applyEdits(text, edits);
+					}
 				}
 			}
 
 			// Step 4: Find closing brace, append shared block before it
 			const closingBraceIndex = text.lastIndexOf('}');
 			const beforeBrace = text.substring(0, closingBraceIndex).trimEnd();
-			const needsComma = !/,\s*$/.test(beforeBrace);
+			
+			// Check if we need a comma - only if there's actual content before the brace
+			// Don't add comma if beforeBrace is just '{' or '{\n'
+			const hasContent = beforeBrace.length > 1 && beforeBrace.trim() !== '{';
+			const needsComma = hasContent && !/,\s*$/.test(beforeBrace);
 
 			let sharedBlock = '\n\n  ' + marker + '\n';
 			for (let i = 0; i < sharedKeys.length; i++) {
@@ -302,6 +321,12 @@ export class SettingsManager {
 			await fs.writeFile(this.settingsFilePath, text, 'utf-8');
 
 			this.outputChannel.appendLine(`Wrote updated settings to ${this.settingsFilePath}`);
+
+			// Return hash of what we actually wrote
+			const writtenContent = await fs.readFile(this.settingsFilePath, 'utf-8');
+			const cleanedForHash = writtenContent.replace(/\s*\/\/\s*Team settings \(merged from \.vscode\/settings\.shared\.json\)\s*\n?/gi, '\n');
+			const parsedWritten = JSONC.parse(cleanedForHash, undefined, { allowTrailingComma: true });
+			return this.computeHash(JSON.stringify(parsedWritten, null, 2));
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			throw new Error(`Failed to write settings.json in ${this.writeSettings.name}: ${errorMessage}`);

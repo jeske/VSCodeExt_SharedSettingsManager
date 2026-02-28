@@ -94,6 +94,16 @@ export function activate(extensionContext: vscode.ExtensionContext) {
 		performSync(settingsManager, localOutputChannel);
 	});
 
+	settingsJsonWatcher.onDidCreate(() => {
+		localOutputChannel.appendLine('Detected creation of settings.json, applying shared settings');
+		performSync(settingsManager, localOutputChannel);
+	});
+
+	settingsJsonWatcher.onDidDelete(() => {
+		localOutputChannel.appendLine('settings.json was deleted, recreating with shared settings');
+		performSync(settingsManager, localOutputChannel);
+	});
+
 	extensionContext.subscriptions.push(settingsJsonWatcher);
 	extensionContext.subscriptions.push(localOutputChannel);
 }

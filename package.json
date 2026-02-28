@@ -2,7 +2,7 @@
   "name": "shared-settings-manager",
   "displayName": "Shared Settings Manager",
   "description": "Automatically sync shared team settings from settings.shared.json into settings.json",
-  "version": "0.1.29",
+  "version": "0.1.36",
   "version_instructions": "increment only the patch number while doing dev iteration",
   "publisher": "artificial-necessity",
   "repository": {
