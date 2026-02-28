@@ -300,7 +300,7 @@ export class SettingsManager {
 			// Step 4: Find closing brace, append shared block before it
 			const closingBraceIndex = text.lastIndexOf('}');
 			const beforeBrace = text.substring(0, closingBraceIndex).trimEnd();
-			
+
 			// Check if we need a comma - only if there's actual content before the brace
 			// Don't add comma if beforeBrace is just '{' or '{\n'
 			const hasContent = beforeBrace.length > 1 && beforeBrace.trim() !== '{';
@@ -310,9 +310,12 @@ export class SettingsManager {
 			for (let i = 0; i < sharedKeys.length; i++) {
 				const key = sharedKeys[i];
 				const value = sharedSettings[key];
-				const jsonValue = JSON.stringify(value);
+				// Use pretty formatting for complex values (arrays, objects)
+				const jsonValue = JSON.stringify(value, null, 2);
+				// Indent multi-line values properly
+				const indentedValue = jsonValue.split('\n').join('\n  ');
 				const comma = i < sharedKeys.length - 1 ? ',' : '';
-				sharedBlock += `  "${key}": ${jsonValue}${comma}\n`;
+				sharedBlock += `  "${key}": ${indentedValue}${comma}\n`;
 			}
 
 			text = beforeBrace + (needsComma ? ',' : '') + sharedBlock + '}';

@@ -5,6 +5,7 @@ import { StatusBarManager } from './statusBar';
 let settingsFileWatcher: vscode.FileSystemWatcher | undefined;
 let statusBarManager: StatusBarManager | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
+let syncDebounceTimer: NodeJS.Timeout | undefined;
 
 export function activate(extensionContext: vscode.ExtensionContext) {
 	const localOutputChannel = vscode.window.createOutputChannel('Shared Settings Manager');
@@ -62,13 +63,13 @@ export function activate(extensionContext: vscode.ExtensionContext) {
 	// Watch for changes to settings.shared.json
 	settingsFileWatcher.onDidChange(() => {
 		localOutputChannel.appendLine('Detected change to settings.shared.json');
-		performSync(settingsManager, localOutputChannel);
+		debouncedPerformSync(settingsManager, localOutputChannel);
 	});
 
 	// Watch for creation of settings.shared.json
 	settingsFileWatcher.onDidCreate(() => {
 		localOutputChannel.appendLine('Detected creation of settings.shared.json');
-		performSync(settingsManager, localOutputChannel);
+		debouncedPerformSync(settingsManager, localOutputChannel);
 	});
 
 	// Watch for deletion of settings.shared.json
@@ -89,23 +90,44 @@ export function activate(extensionContext: vscode.ExtensionContext) {
 
 	const settingsJsonWatcher = vscode.workspace.createFileSystemWatcher(settingsPattern);
 
+	// CRITICAL: Any change, creation, or deletion of settings.json triggers sync
+	// This handles: edits, renames, deletions - all scenarios
 	settingsJsonWatcher.onDidChange(() => {
 		localOutputChannel.appendLine('Detected change to settings.json, re-applying shared settings');
-		performSync(settingsManager, localOutputChannel);
+		debouncedPerformSync(settingsManager, localOutputChannel);
 	});
 
 	settingsJsonWatcher.onDidCreate(() => {
 		localOutputChannel.appendLine('Detected creation of settings.json, applying shared settings');
-		performSync(settingsManager, localOutputChannel);
+		debouncedPerformSync(settingsManager, localOutputChannel);
 	});
 
 	settingsJsonWatcher.onDidDelete(() => {
 		localOutputChannel.appendLine('settings.json was deleted, recreating with shared settings');
-		performSync(settingsManager, localOutputChannel);
+		debouncedPerformSync(settingsManager, localOutputChannel);
 	});
 
 	extensionContext.subscriptions.push(settingsJsonWatcher);
 	extensionContext.subscriptions.push(localOutputChannel);
+}
+
+/**
+ * Debounced sync to prevent race conditions when multiple rapid changes occur.
+ * Waits 300ms after last change before syncing.
+ */
+function debouncedPerformSync(
+	settingsManager: SettingsManager,
+	logOutputChannel: vscode.OutputChannel
+): void {
+	// Clear existing timer
+	if (syncDebounceTimer) {
+		clearTimeout(syncDebounceTimer);
+	}
+
+	// Set new timer
+	syncDebounceTimer = setTimeout(() => {
+		performSync(settingsManager, logOutputChannel);
+	}, 300);
 }
 
 /**
